@@ -2,14 +2,28 @@
 完整的Y分支逆向设计示例 - 使用Lumerical的lumopt库
 本脚本展示如何使用Ansys Lumerical的正式优化框架
 """
+import sys
+
+# -- 环境修复代码 --
+# 移除可能冲突的Python 3.13路径，防止环境污染
+paths_to_remove = []
+for p in sys.path:
+    if 'Python313' in p:
+        paths_to_remove.append(p)
+
+if paths_to_remove:
+    print("检测到冲突的路径，正在移除...")
+    for p in paths_to_remove:
+        sys.path.remove(p)
+        print(f"  - 已移除: {p}")
+# -- 环境修复结束 --
 
 import numpy as np
-import sys
 import os
 os.environ['LUMERICAL_GPU'] = '1'
 
 # 设置Lumerical API路径
-lumerical_path = r"D:\Lumerical\v202\api\python"
+lumerical_path = r"D:\Lumerical\v241\api\python"
 if lumerical_path not in sys.path:
     sys.path.append(lumerical_path)
 
@@ -47,7 +61,7 @@ def splitter_function(params):
     返回:
         polygon_points: 多边形顶点数组
     """
-    import scipy.interpolate as sp
+    from scipy.interpolate import interp1d
     
     # 确定参数数量分配
     n_total = len(params)
@@ -79,7 +93,7 @@ def splitter_function(params):
     # 样条插值 - 外边缘
     n_interp = 100
     poly_x_outer = np.linspace(min(points_x_outer), max(points_x_outer), n_interp)
-    interp_outer = sp.interpolate.interp1d(points_x_outer, points_y_outer, kind='cubic')
+    interp_outer = interp1d(points_x_outer, points_y_outer, kind='cubic')
     poly_y_outer = interp_outer(poly_x_outer)
     
     # ==========================================
@@ -104,7 +118,7 @@ def splitter_function(params):
     # 样条插值 - 内边缘
     # 注意：内边缘的插值范围只在 x >= 0
     poly_x_inner = np.linspace(0.0, max(points_x_inner), 50)
-    interp_inner = sp.interpolate.interp1d(points_x_inner, points_y_inner, kind='cubic')
+    interp_inner = interp1d(points_x_inner, points_y_inner, kind='cubic')
     poly_y_inner = interp_inner(poly_x_inner)
     
     # ==========================================
@@ -234,11 +248,10 @@ def run_lumopt_optimization():
     print("\n步骤4: 设置优化器")
     
     optimizer = ScipyOptimizers(
-        max_iter=30,  # 增加迭代次数
+        max_iter=50,  # 增加迭代次数
         method='L-BFGS-B',
         scaling_factor=1.0,
-        pgtol=1e-20,  # 更严格的收敛条件
-        ftol=1e-9    # 函数值收敛容限
+        pgtol=1e-5  # 放宽收敛条件
     )
     
     # 5. 创建优化对象
