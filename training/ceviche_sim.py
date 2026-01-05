@@ -6,27 +6,27 @@ import matplotlib.pyplot as plt
 class CevicheSim:
     def __init__(self, geometry):
         """
-        Initialize Simulation Wrapper.
-        Args:
-            geometry (MMIGeometry): Instance of MMIGeometry containing grid info.
+        初始化模拟包装器。
+        参数：
+            geometry (MMIGeometry): 包含网格信息的MMIGeometry实例。
         """
         self.geo = geometry
         self.geo = geometry
-        # Use dimensionless units where c=1
-        # Length in microns
-        self.omega = 2 * np.pi / 1.55 # 1.55um wavelength, c=1
-        self.dl = geometry.dl # already in microns
-        self.npml = 20 # Perfectly Matched Layer thickness in pixels
+        # 使用无量纲单位，其中c=1
+        # 长度单位：微米
+        self.omega = 2 * np.pi / 1.55 # 1.55微米波长，c=1
+        self.dl = geometry.dl # 已转换为微米
+        self.npml = 20 # 完美匹配层（PML）厚度（像素）
         
-        # Source & Probe definitions
+        # 源和探针定义
         self._init_ports()
         
     def _init_ports(self):
-        """Define input source and output monitors."""
+        """定义输入源和输出监测器。"""
         nx, ny = self.geo.Nx, self.geo.Ny
         
-        # Input Source (Left)
-        # Use Gaussian profile (Complex) - Reverting to Run 185 config
+        # 输入源（左侧）
+        # 使用高斯分布（复数）- 恢复到运行185的配置
         self.source_mask = np.zeros((nx, ny), dtype=np.complex128) 
         cy = ny // 2
         
@@ -37,7 +37,7 @@ class CevicheSim:
         src_x = self.npml + 10
         self.source_mask[src_x, :] = gaussian_profile * 10.0
         
-        # Output Monitors (Right)
+        # 输出监测器（右侧）
         out_x = nx - self.npml - 5
         mmi_center_y = self.geo.Ly / 2.0
         out_offset = 1.5 
@@ -51,30 +51,30 @@ class CevicheSim:
         
     def run(self, eps_r):
         """
-        Run FDFD simulation.
-        Args:
-             eps_r (np.array): Relative permittivity distribution (Nx, Ny).
-        Returns:
-             transmission (float): Total transmission to output ports.
-             fields (np.array): Field distribution (Hz).
+        运行FDFD模拟。
+        参数：
+             eps_r (np.array): 相对介电常数分布 (Nx, Ny)。
+        返回值：
+             transmission (float): 输出端口的总传输。
+             fields (np.array): 场分布 (Hz)。
         """
-        # Run FDFD (Hz polarization for TE)
+        # 运行FDFD（TE的Hz极化）
         simulation = fdfd_hz(self.omega, self.dl, eps_r, [self.npml, self.npml])
         
         try:
-             # fdfd_hz returns (Ex, Ey, Hz) tuple
+             # fdfd_hz返回 (Ex, Ey, Hz) 元组
              fields_tuple = simulation.solve(self.source_mask)
-             Hz = fields_tuple[0] # The first component contains the Hz field in this version
+             Hz = fields_tuple[0] # 此版本中第一个分量包含Hz场
         except Exception as e:
-             # Fallback for stability
-             print(f"Warning: Simulation failed: {e}")
+             # 稳定性回退
+             print(f"警告：模拟失败：{e}")
              return 0.0, np.zeros_like(self.source_mask)
         
-        # Calculate power/intensity at probes
+        # 计算探针处的功率/强度
         t_top = np.sum(np.abs(Hz * self.probe_top)**2)
         t_bot = np.sum(np.abs(Hz * self.probe_bot)**2)
         
-        # Return individual transmissions for reward calculation
+        # 返回各自的传输以用于奖励计算
         return (t_top, t_bot), Hz
 
 if __name__ == "__main__":
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     eps = geo.get_permittivity()
     
     T, field = sim.run(eps)
-    print(f"Baseline Transmission: {T}")
+    print(f"基准传输：{T}")
     
     plt.imshow(np.real(field).T, origin='lower', cmap='RdBu')
     plt.savefig("sim_test.png")
