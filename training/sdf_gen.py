@@ -2,92 +2,96 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class MMIGeometry:
-    def __init__(self, region_size=(10.0, 10.0), resolution=0.04):
+    def __init__(self, region_size=(14.0, 14.0), resolution=0.02):
         """
-        Initialize the MMI Geometry generator.
+        初始化 MMI 几何生成器。
         
-        Args:
-            region_size (tuple): (Lx, Ly) physical size in microns.
-            resolution (float): grid step size in microns.
+        参数：
+            region_size (tuple): 物理尺寸 (Lx, Ly)，单位微米。
+            resolution (float): 网格步长，单位微米。
         """
         self.Lx, self.Ly = region_size
         self.dl = resolution
         self.Nx = int(self.Lx / self.dl)
         self.Ny = int(self.Ly / self.dl)
         
-        # Create grid
+        # 创建网格
         self.x = np.linspace(0, self.Lx, self.Nx)
         self.y = np.linspace(0, self.Ly, self.Ny)
         self.X, self.Y = np.meshgrid(self.x, self.y, indexing='ij')
         
-        # MMI Design Parameters (Defaults)
+        # MMI 设计参数（默认值）
         self.wg_width = 0.5
         self.mmi_width = 4.0
-        self.mmi_length = 6.0 # Kept small for fast testing, real MMI is larger
+        self.mmi_length = 6.0 # 为了快速测试保持较短，实际器件会更长
         self.taper_width = 1.0
         self.taper_length = 1.0
+        self.out_offset = 1.5 # 中心到输出臂的垂直偏移（微米）
         
-        # Initialize Base SDF
+        # 初始化基础 SDF
         self.sdf = np.zeros((self.Nx, self.Ny))
         self.reset_geometry()
 
     def reset_geometry(self):
-        """Resets the SDF to the initial MMI shape."""
-        # Clean slate
+        """重置 SDF，生成初始 MMI 形状。"""
+        # 清空场景
         self.sdf = np.full((self.Nx, self.Ny), -1.0)
         
-        # Center coordinates
+        # 中心坐标
         cy = self.Ly / 2.0
         cx = self.Lx / 2.0
         
-        # 1. Input Waveguide (Left)
-        # Defined from x=0 to start of MMI
+        # 1. 输入波导（左侧）
+        # 范围：x=0 到 MMI 起点
         input_y_dist = np.abs(self.Y - cy) - (self.wg_width / 2.0)
         
-        # 2. MMI Body (Center)
+        # 2. MMI 主体（中心）
         mmi_start_x = (self.Lx - self.mmi_length) / 2.0
         mmi_end_x = mmi_start_x + self.mmi_length
         mmi_y_dist = np.abs(self.Y - cy) - (self.mmi_width / 2.0)
         
-        # 3. Combine shapes (Union)
-        # Simple box approximation for now
-        # We want SD > 0 for material (Silicon), < 0 for cladding (Air/SiO2)
-        # Using simple rectangle logic for initial shape
+        # 3. 形状组合（并集）
+        # 采用简单矩形近似：SDF>0 表示硅，SDF<0 表示包层（空气/SiO2）
         
-        # Input WG
+        # 输入波导区域
         mask_input = (self.X < mmi_start_x) & (input_y_dist < 0)
         
-        # MMI Body
+        # MMI 主体区域
         mask_mmi = (self.X >= mmi_start_x) & (self.X <= mmi_end_x) & (mmi_y_dist < 0)
         
-        # Output WGs (Two arms)
-        out_offset = 1.5 # micron separation
-        mask_out_top = (self.X > mmi_end_x) & (np.abs(self.Y - (cy + out_offset)) < self.wg_width/2.0)
-        mask_out_bot = (self.X > mmi_end_x) & (np.abs(self.Y - (cy - out_offset)) < self.wg_width/2.0)
+        # 输出波导（上下两臂）
+        mask_out_top = (self.X > mmi_end_x) & (np.abs(self.Y - (cy + self.out_offset)) < self.wg_width/2.0)
+        mask_out_bot = (self.X > mmi_end_x) & (np.abs(self.Y - (cy - self.out_offset)) < self.wg_width/2.0)
         
         self.mask = mask_input | mask_mmi | mask_out_top | mask_out_bot
         
-        # Convert binary mask to rough SDF (1 inside, -1 outside)
+        # 将二值掩码转换成粗略 SDF（1 为器件区，-1 为包层）
         self.sdf = np.where(self.mask, 1.0, -1.0)
 
     def update_sdf(self, action_map):
         """
-        Update SDF based on actions.
-        For simplicity, action_map is an additive change to the SDF in the MMI region.
+        根据 action_map 对 SDF 做增量更新。
+        为简单起见，这里把 action_map 视作作用在 MMI 区域的加性扰动。
         """
-        # Assume action_map matches MMI region shape or is interpolated
-        # For this prototype, we'll assume global small perturbations
-        # Real implementation would map action vector to spline points or pixels
-        self.sdf += action_map * 0.1 # Scale factor
+        # 假设 action_map 已与 MMI 区域尺寸匹配（或已插值）
+        # 原型阶段使用全局小扰动；真实实现可映射到样条或像素
+        self.sdf += action_map * 0.1 # 缩放因子
 
     def get_density(self):
-        """Returns binary density (0 or 1) based on SDF > 0."""
+        """基于 SDF>0 返回二值密度（0 或 1）。"""
         return (self.sdf > 0).astype(float)
         
     def get_permittivity(self, eps_struct=12.0, eps_bg=1.0):
-        """Returns relative permittivity distribution."""
+        """返回相对介电常数分布。"""
         mask = self.get_density()
         return mask * (eps_struct - eps_bg) + eps_bg
+    
+    def get_straight_waveguide(self, eps_struct=12.0, eps_bg=1.0):
+        """生成直波导用于归一化。"""
+        cy = self.Ly / 2.0
+        wg_y_dist = np.abs(self.Y - cy) - (self.wg_width / 2.0)
+        mask_straight = wg_y_dist < 0
+        return np.where(mask_straight, eps_struct, eps_bg)
 
 if __name__ == "__main__":
     geo = MMIGeometry()
