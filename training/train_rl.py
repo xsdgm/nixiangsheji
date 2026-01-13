@@ -10,11 +10,13 @@ from mmi_env import MMIOptEnv
 
 class RewardLoggingCallback(BaseCallback):
     """
-    自定义回调类，用于在训练过程中打印奖励和相关信息
+    自定义回调类，用于在训练过程中打印奖励和相关信息，并动态调整奖励权重
     """
-    def __init__(self, print_freq=100, verbose=0):
+    def __init__(self, total_timesteps, print_freq=100, verbose=0):
         super(RewardLoggingCallback, self).__init__(verbose)
-        self.print_freq = print_freq  # 每隔多少步打印一次
+        self.print_freq = print_freq
+        self.total_timesteps = total_timesteps
+        
         self.episode_rewards = []
         self.episode_transmissions = []
         self.episode_imbalances = []
@@ -22,6 +24,31 @@ class RewardLoggingCallback(BaseCallback):
         self.current_episode_steps = 0
         
     def _on_step(self) -> bool:
+        # --- 动态调整权重逻辑 ---
+        # 获取底层环境 (解包 VecEnv -> Monitor -> MMIOptEnv)
+        # 注意: self.training_env 是 VecEnv
+        env = self.training_env.envs[0].unwrapped
+        
+        # 计算进度 (0.0 -> 1.0)
+        progress = min(1.0, self.num_timesteps / self.total_timesteps)
+        
+        # 定义权重计划 (Schedule)
+        # Alpha (传输权重): 20.0 -> 10.0 (随时间略微降低，保持关注但让位于平衡)
+        # Beta (平衡权重):   0.0 -> 50.0 (从0开始，后期强力惩罚不平衡)
+        
+        start_alpha, end_alpha = 20.0, 10.0
+        start_beta, end_beta = 5.0, 80.0 # 提高最终beta以强制平衡
+        
+        current_alpha = start_alpha + (end_alpha - start_alpha) * progress
+        current_beta = start_beta + (end_beta - start_beta) * progress
+        
+        # 更新环境参数
+        if hasattr(env, 'alpha'):
+            env.alpha = current_alpha
+            env.beta = current_beta
+        
+        # -----------------------
+
         # 获取当前步的奖励和info
         if len(self.locals.get('infos', [])) > 0:
             info = self.locals['infos'][0]
@@ -33,7 +60,8 @@ class RewardLoggingCallback(BaseCallback):
             # 每隔 print_freq 步打印一次
             if self.num_timesteps % self.print_freq == 0:
                 print(f"\n{'='*60}")
-                print(f"时间步: {self.num_timesteps}")
+                print(f"时间步: {self.num_timesteps} / {self.total_timesteps} ({progress*100:.1f}%)")
+                print(f"[动态权重] Alpha(传输): {current_alpha:.2f}, Beta(平衡): {current_beta:.2f}")
                 print(f"当前步奖励: {reward:.4f}")
                 if 'transmission' in info:
                     print(f"  总传输: {info['transmission']:.4f}")
@@ -79,6 +107,9 @@ def train():
     log_dir = "./logs/"
     os.makedirs(log_dir, exist_ok=True)
     
+    # 训练步数设定
+    TOTAL_TIMESTEPS = 10000
+
     # Create environment
     env = MMIOptEnv()
     env = Monitor(env, log_dir)
@@ -87,14 +118,15 @@ def train():
     # PPO is a good default for continuous control
     model = PPO("MlpPolicy", env, verbose=1)
     
-    # 创建自定义回调
-    reward_callback = RewardLoggingCallback(print_freq=100)  # 每100步打印一次
+    # 创建自定义回调 (传入总步数用于计算进度)
+    reward_callback = RewardLoggingCallback(total_timesteps=TOTAL_TIMESTEPS, print_freq=100)
     
-    print("Starting training...")
-    print("将每隔100步打印奖励信息，每个episode结束时打印总结\n")
+    print("Starting training with Dynamic Reward Schedule...")
+    print("Alpha (传输): 20.0 -> 10.0")
+    print("Beta  (平衡):  5.0 -> 80.0\n")
     
-    # Train for 10,000 timesteps (~200 episodes of 50 steps)
-    model.learn(total_timesteps=10000, callback=reward_callback)
+    # Train
+    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=reward_callback)
     
     # Save the model
     model.save("mmi_ppo_model")

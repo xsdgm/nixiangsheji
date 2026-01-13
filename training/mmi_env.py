@@ -30,6 +30,11 @@ class MMIOptEnv(gym.Env):
         self.current_step = 0
         self.max_steps = 50 # 形状演化的短回合
         
+        # 动态奖励权重 (将在训练中调整)
+        # 初始阶段：极大偏重通光率，忽略不平衡
+        self.alpha = 20.0 # 通光率权重
+        self.beta = 0.0   # 不平衡权重 (初始为0)
+        
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.geo.reset_geometry()
@@ -88,13 +93,12 @@ class MMIOptEnv(gym.Env):
         # 4. 奖励
         # 目标：最大化总传输并最小化不平衡
         # Reward = alpha * Total_T - beta * |T_top - T_bot|
+        # 注意：alpha 和 beta 现在是类属性，由外部 Callback 动态调整
+        
         total_t = t_top + t_bot
         imbalance = abs(t_top - t_bot)
         
-        alpha = 10.0
-        beta = 20.0
-        
-        reward = alpha * total_t - beta * imbalance
+        reward = self.alpha * total_t - self.beta * imbalance
         
         # 5. 完成条件
         terminated = self.current_step >= self.max_steps

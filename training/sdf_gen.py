@@ -75,8 +75,8 @@ class MMIGeometry:
         为简单起见，这里把 action_map 视作作用在 MMI 区域的加性扰动。
         """
         # 假设 action_map 已与 MMI 区域尺寸匹配（或已插值）
-        # 原型阶段使用全局小扰动；真实实现可映射到样条或像素
-        self.sdf += action_map * 0.1 # 缩放因子
+        # 使用更大的缩放因子，使动作能够实际改变几何
+        self.sdf += action_map * 1.0  # 增大缩放因子以产生可见的几何变化
 
     def get_density(self):
         """基于 SDF>0 返回二值密度（0 或 1）。"""
