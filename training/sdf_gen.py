@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class MMIGeometry:
-    def __init__(self, region_size=(14.0, 14.0), resolution=0.02):
+    def __init__(self, region_size=(50.0, 10.0), resolution=0.02):
         """
         初始化 MMI 几何生成器。
         
@@ -20,13 +20,14 @@ class MMIGeometry:
         self.y = np.linspace(0, self.Ly, self.Ny)
         self.X, self.Y = np.meshgrid(self.x, self.y, indexing='ij')
         
-        # MMI 设计参数（默认值）
+        # MMI 设计参数（优化后 - 逆向设计初始值）
+        # 增大区域以提供更多自由度
         self.wg_width = 0.5
-        self.mmi_width = 4.0
-        self.mmi_length = 6.0 # 为了快速测试保持较短，实际器件会更长
+        self.mmi_width = 6.0   # 宽度增加到 6.0um
+        self.mmi_length = 35.0 # 长度增加到 35.0um
         self.taper_width = 1.0
-        self.taper_length = 1.0
-        self.out_offset = 1.5 # 中心到输出臂的垂直偏移（微米）
+        self.taper_length = 2.0
+        self.out_offset = 1.5 # 调整输出偏移以适应更宽的 MMI
         
         # 初始化基础 SDF
         self.sdf = np.zeros((self.Nx, self.Ny))
@@ -97,4 +98,4 @@ if __name__ == "__main__":
     geo = MMIGeometry()
     plt.imshow(geo.get_density().T, origin='lower')
     plt.savefig("mmi_init.png")
-    print("Geometry test complete.")
+    print("几何测试完成。")

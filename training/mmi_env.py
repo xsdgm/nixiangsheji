@@ -1,6 +1,6 @@
-import gym
+import gymnasium as gym
 import numpy as np
-from gym import spaces
+from gymnasium import spaces
 from scipy.ndimage import zoom
 
 from sdf_gen import MMIGeometry
@@ -10,17 +10,17 @@ class MMIOptEnv(gym.Env):
     def __init__(self):
         super(MMIOptEnv, self).__init__()
         
-        # Initialize Core Components
+        # 初始化核心组件
         self.geo = MMIGeometry()
         self.sim = CevicheSim(self.geo)
         
-        # Action Space: 10x10 Control Grid (Deformation)
-        # Values between -1 and 1 representing change in SDF
+        # 动作空间：10x10 控制网格（形变）
+        # 值在 -1 和 1 之间，表示 SDF 的变化
         self.act_res = (10, 10)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=self.act_res, dtype=np.float32)
         
-        # Observation Space: The Density Mask (on the fine grid)
-        # Shape matches geometry grid
+        # 观察空间：密度掩码（在细网格上）
+        # 形状与几何网格匹配
         self.observation_space = spaces.Box(
             low=0, high=1, 
             shape=(self.geo.Nx, self.geo.Ny, 1), 
@@ -28,56 +28,65 @@ class MMIOptEnv(gym.Env):
         )
         
         self.current_step = 0
-        self.max_steps = 50 # Short episode for shape evolution
+        self.max_steps = 50 # 形状演化的短回合
         
-    def reset(self):
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
         self.geo.reset_geometry()
         self.current_step = 0
-        return self._get_obs()
+        return self._get_obs(), {}
 
     def step(self, action):
         self.current_step += 1
         
-        # 1. Process Action (Upscale 10x10 -> MMI Region)
-        # We only apply deformation to the central MMI region to avoid breaking ports
-        # Extract MMI Region dimensions derived in sdf_gen (need to make public or hardcode)
-        # For prototype: simple global upscale and mask out ports
+        # 1. 处理动作（将 10x10 上采样到 MMI 区域）
+        # 我们只对中心的 MMI 区域应用形变，以避免破坏端口
+        # 提取 MMI 区域尺寸在 sdf_gen 中推导（需要公开或硬编码）
+        # 原型：简单的全局上采样并掩码掉端口
         
         action_map = action # (10, 10)
         
-        # Calculate zoom factors to match full grid
+        # 计算缩放因子以匹配完整网格
         zoom_x = self.geo.Nx / self.act_res[0]
         zoom_y = self.geo.Ny / self.act_res[1]
         
-        # Upscale action to full grid size
+        # 将动作上采样到完整网格大小
         delta_sdf = zoom(action_map, (zoom_x, zoom_y), order=1)
         
-        # Ensure sizes match exactly (rounding errors)
+        # 确保尺寸完全匹配（舍入误差）
         delta_sdf = delta_sdf[:self.geo.Nx, :self.geo.Ny]
-        # Pad if needed
+        # 如果需要则填充
         if delta_sdf.shape != (self.geo.Nx, self.geo.Ny):
             pad_x = self.geo.Nx - delta_sdf.shape[0]
             pad_y = self.geo.Ny - delta_sdf.shape[1]
             delta_sdf = np.pad(delta_sdf, ((0,pad_x),(0,pad_y)), 'constant')
 
-        # Apply spatial mask to delta_sdf so we don't move input/output ports
-        # (Simple box mask for center region)
+        # 对 delta_sdf 应用空间掩码，这样我们就不会移动输入/输出端口
+        # （中心区域的简单盒式掩码）
         center_mask = np.zeros_like(delta_sdf)
         mmi_start = int(self.geo.Nx * 0.2)
         mmi_end = int(self.geo.Nx * 0.8)
         center_mask[mmi_start:mmi_end, :] = 1.0
         
-        final_delta = delta_sdf * center_mask * 0.5 # Scale deformation strength
+        final_delta = delta_sdf * center_mask * 0.5 # 缩放形变强度
         
-        # 2. Update Geometry
+        # 2. 更新几何
         self.geo.update_sdf(final_delta)
         
-        # 3. Simulation
+        # 3. 仿真
         eps = self.geo.get_permittivity()
-        (t_top, t_bot), fields = self.sim.run(eps)
+        simulation_results = self.sim.run(eps)
         
-        # 4. Reward
-        # Goal: Maximize total transmission AND Minimize imbalance
+        # 从字典中提取结果
+        # sim.run 返回 monitors 字典
+        monitor_out = simulation_results['expansion_out']
+        t_top = monitor_out['S21']
+        t_bot = monitor_out['S31']
+        
+        # 如果需要 fields，可以从 simulation_results['full_field'] 获取，但目前不需要
+        
+        # 4. 奖励
+        # 目标：最大化总传输并最小化不平衡
         # Reward = alpha * Total_T - beta * |T_top - T_bot|
         total_t = t_top + t_bot
         imbalance = abs(t_top - t_bot)
@@ -87,8 +96,9 @@ class MMIOptEnv(gym.Env):
         
         reward = alpha * total_t - beta * imbalance
         
-        # 5. Done Condition
-        done = self.current_step >= self.max_steps
+        # 5. 完成条件
+        terminated = self.current_step >= self.max_steps
+        truncated = False
         
         info = {
             'transmission': total_t,
@@ -97,13 +107,13 @@ class MMIOptEnv(gym.Env):
             'imbalance': imbalance
         }
         
-        return self._get_obs(), reward, done, info
+        return self._get_obs(), reward, terminated, truncated, info
 
     def _get_obs(self):
-        # Return density as (Nx, Ny, 1) image
+        # 返回密度为 (Nx, Ny, 1) 图像
         obs = self.geo.get_density()
-        return np.expand_dims(obs, axis=-1)
+        return np.expand_dims(obs, axis=-1).astype(np.float32)
 
     def render(self, mode='human'):
-        # Optional: Visualize current state
+        # 可选：可视化当前状态
         pass

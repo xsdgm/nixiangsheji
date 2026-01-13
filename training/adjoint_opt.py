@@ -8,11 +8,11 @@ from ceviche import fdfd_hz
 
 from sdf_gen import MMIGeometry
 
-# Configuration (Consistent with ceviche_sim.py)
-# Use dimensionless units c=1
-# wavelength = 1.55 um
+# 配置参数（与 ceviche_sim.py 保持一致）
+# 使用无量纲单位 c=1
+# 波长 = 1.55 um
 OMEGA = 2 * np.pi / 1.55
-# DL from MMIGeometry (0.04 um)
+# DL 来自 MMIGeometry (0.04 um)
 # NPML = 20
 
 class MMIAdjointOptimizer:
@@ -25,35 +25,35 @@ class MMIAdjointOptimizer:
         self.steps = steps
         self.lr = learning_rate
         
-        # Initialize Source and Probes (Static)
+        # 初始化光源和探测器（静态）
         self._init_ports()
         
-        # Design Region Mask (Where we allow changes)
-        # We allow optimizing the MMI body region
+        # 设计区域掩码（允许改变的区域）
+        # 我们允许优化 MMI 主体区域
         self.design_mask = self._create_design_mask()
         
-        # Initial Design Variable (normalized 0 to 1)
-        # Initialize with 0.5 (Gray) in the design region for best gradient flow
-        # Or initialize with the starting geometry
+        # 初始设计变量（归一化到 0 到 1）
+        # 在设计区域初始化为 0.5（灰色）以获得最佳梯度流
+        # 或者用起始几何形状初始化
         self.design_init = self.geo.get_density() * self.design_mask + 0.5 * self.design_mask * (1 - self.geo.get_density())
-        # Actually, let's start with a seed from the current geometry but slightly smoothed
+        # 实际上，让我们从当前几何形状的种子开始，稍微平滑一下
         self.design_init = self.geo.get_density()
         
     def _init_ports(self):
-        # Same logic as ceviche_sim.py
+        # 与 ceviche_sim.py 中的逻辑相同
         nx, ny = self.Nx, self.Ny
         
-        # Source
+        # 光源
         self.source_mask = np.zeros((nx, ny), dtype=np.complex128)
         cy = ny // 2
         sigma_pix = 6.0
         y_idx = np.arange(ny)
-        # Note: Use standard numpy for initialization, not autograd
+        # 注意：初始化时使用标准 numpy，而不是 autograd
         gaussian_profile = np.exp(-0.5 * ((y_idx - cy) / sigma_pix)**2)
         src_x = self.npml + 10
         self.source_mask[src_x, :] = gaussian_profile * 10.0
         
-        # Probes
+        # 探测器
         out_x = nx - self.npml - 5
         mmi_center_y = self.geo.Ly / 2.0
         out_offset = 1.5 
@@ -66,11 +66,11 @@ class MMIAdjointOptimizer:
         self.probe_bot[out_x, y_bot_idx] = 1.0
 
     def _create_design_mask(self):
-        # Define the rectangular MMI region as the design domain
-        # Get coordinates from geometry utils would be better, but hardcoding for consistency with sdf_gen
+        # 将矩形 MMI 区域定义为设计域
+        # 从几何工具获取坐标会更好，但为了与 sdf_gen 保持一致而硬编码
         mask = np.zeros((self.Nx, self.Ny))
         
-        # Re-derive MMI region indices
+        # 重新推导 MMI 区域索引
         mmi_length_pix = int(self.geo.mmi_length / self.dl)
         mmi_width_pix = int(self.geo.mmi_width / self.dl)
         
@@ -85,51 +85,51 @@ class MMIAdjointOptimizer:
         return mask
 
     def objective(self, design_variable):
-        # design_variable is (Nx, Ny) array of density values
-        # Sigmoid projection or simple clamping could be used, but adam_minimize handles bounds? 
-        # No, we usually map variable to density
+        # design_variable 是 (Nx, Ny) 的密度值数组
+        # 可以使用 Sigmoid 投影或简单的截断，但 adam_minimize 处理边界？
+        # 不，我们通常将变量映射到密度
         
-        # Density projection (simple barrier optional, here just using raw variable interpreted as density)
-        # Ideally we want binary designs, so we might add a penalty for non-binary values later
-        # specific_density = npa.clip(design_variable, 0, 1) # Clip breaks gradient? Use sigmoid
+        # 密度投影（简单的障碍函数是可选的，这里只是使用原始变量解释为密度）
+        # 理想情况下我们想要二值化设计，所以稍后可能会添加非二值化惩罚
+        # specific_density = npa.clip(design_variable, 0, 1) # Clip 会破坏梯度？使用 sigmoid
         
-        density = design_variable # Start simple
+        density = design_variable # 从简单开始
         
-        # epsilon logic
+        # epsilon 逻辑
         # eps = mask * (eps_si - eps_bg) + eps_bg
         eps_r = density * (12.0 - 1.0) + 1.0
         
-        # Simulation
+        # 仿真
         # fdfd_hz(omega, dl, eps_r, npml)
         sim = fdfd_hz(OMEGA, self.dl, eps_r, [self.npml, self.npml])
         
-        # solve() returns (Hz, Ex, Ey) tuple? Or (Ex, Ey, Hz)?
-        # Let's assume ceviche standard which returns a tuple.
-        # However, fdfd_hz.solve returns (Ex, Ey, Hz) typically.
-        # We need to compute intensity.
+        # solve() 返回 (Hz, Ex, Ey) 元组？还是 (Ex, Ey, Hz)？
+        # 假设是 ceviche 标准，返回一个元组。
+        # 然而，fdfd_hz.solve 通常返回 (Ex, Ey, Hz)。
+        # 我们需要计算强度。
         
         out_fields = sim.solve(self.source_mask)
-        # Note: autograd wrapping might make tuple unpacking tricky if not careful
-        # But ceviche examples usually work with unpacking
+        # 注意：autograd 包装可能会使元组解包变得棘手，如果不小心的话
+        # 但是 ceviche 示例通常可以正常解包
         
-        # Based on my debug earlier, index 0 was Hz.
+        # 根据我之前的调试，索引 0 是 Hz。
         Hz = out_fields[0]
         
-        # Calculate Power (Transmission)
-        # |Hz|^2 at probes
-        # We must use npa (autograd numpy) for operations
+        # 计算功率（传输）
+        # 探测器处的 |Hz|^2
+        # 我们必须使用 npa（autograd numpy）进行操作
         
         t_top = npa.sum(npa.abs(Hz * self.probe_top)**2)
         t_bot = npa.sum(npa.abs(Hz * self.probe_bot)**2)
         
-        # Optimization Objective: Maximize Power, Minimize Imbalance
+        # 优化目标：最大化功率，最小化不平衡
         # Loss = - (Total_T - Penalty * Imbalance^2)
         
         total_t = t_top + t_bot
-        imbalance = (t_top - t_bot)**2 # Squared difference to penalize strictly
+        imbalance = (t_top - t_bot)**2 # 平方差以严格惩罚
         
-        # Weights (arbitrary)
-        # Increase imbalance penalty to force 50:50
+        # 权重（任意）
+        # 增加不平衡惩罚以强制 50:50
         loss = -1.0 * (10.0 * total_t - 50.0 * imbalance)
         
         return loss
@@ -138,7 +138,7 @@ class MMIAdjointOptimizer:
         print(f"Iter {iteration}: Loss = {of}")
         
         if iteration % 10 == 0:
-            # Visualize
+            # 可视化
             density = params
             plt.figure()
             plt.imshow(density.T, origin='lower', cmap='gray')
@@ -150,24 +150,24 @@ class MMIAdjointOptimizer:
     def run(self):
         print("Starting Adjoint Optimization...")
         
-        # Initial parameters
+        # 初始参数
         params = self.design_init
         
-        # Adam Parameters
+        # Adam 参数
         beta1 = 0.9
         beta2 = 0.999
         epsilon = 1e-8
         m, v = 0, 0
         
-        # Define Gradient Function using autograd
-        # We need to compute value and gradient
+        # 使用 autograd 定义梯度函数
+        # 我们需要计算值和梯度
         from autograd import value_and_grad
         
         def obj_wrapper(p):
-            # Apply design mask to params
-            # We treat params as the full density for simplicity, 
-            # but only gradients in the design region will matter if we handle it right.
-            # actually, let's keep params as full grid.
+            # 对参数应用设计掩码
+            # 为简单起见，我们将 params 视为完整密度，
+            # 但如果我们正确处理，只有设计区域中的梯度才重要。
+            # 实际上，让我们将 params 保持为完整网格。
             eff_density = p * self.design_mask + self.geo.get_density() * (1 - self.design_mask)
             return self.objective(eff_density)
         
@@ -176,23 +176,23 @@ class MMIAdjointOptimizer:
         for i in range(self.steps):
             loss, grads = value_grad_func(params)
             
-            # Mask gradients (only optimize design region)
+            # 掩码梯度（仅优化设计区域）
             grads = grads * self.design_mask
             
-            # Adam Update
+            # Adam 更新
             m = beta1 * m + (1 - beta1) * grads
             v = beta2 * v + (1 - beta2) * (grads**2)
             m_hat = m / (1 - beta1**(i + 1))
             v_hat = v / (1 - beta2**(i + 1))
             
-            # Update params
+            # 更新参数
             params = params - self.lr * m_hat / (npa.sqrt(v_hat) + epsilon)
             
-            # Projection / Clipping (0 to 1)
-            # Important for density
+            # 投影 / 截断（0 到 1）
+            # 对密度很重要
             params = npa.clip(params, 0, 1)
             
-            # Callback / Logging
+            # 回调 / 日志记录
             self.callback(i, loss, params)
             
         return params

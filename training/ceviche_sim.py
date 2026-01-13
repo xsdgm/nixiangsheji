@@ -2,6 +2,7 @@ import numpy as np
 import ceviche
 from ceviche import fdfd_hz, fdfd_ez
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 class CevicheSim:
     def __init__(self, geometry):
@@ -74,7 +75,7 @@ class CevicheSim:
         
     def run(self, eps_r, normalization_power=None):
         """
-        运行FDFD模拟 (TM模式 / Ez)。
+        运行FDFD模拟 (TE模式 / Hz)。
         """
         # --- 安全检查：光源是否在波导芯层？---
         n_at_source = np.sqrt(np.real(eps_r[self.src_x, self.cy]))
@@ -88,20 +89,21 @@ class CevicheSim:
             print("!"*40 + "\n")
 
         # --- 运行 FDFD 求解器 (核心修改) ---
-        # 使用 fdfd_ez (TM Mode)，因为它支持对称的高斯光源
-        print(f"Debug: Running FDFD_Ez (TM Mode)... dl={self.dl} um")
-        simulation = fdfd_ez(self.omega, self.dl, eps_r, [self.npml, self.npml])
+        # 使用 fdfd_hz (TE Mode)，标准平面光波导模式
+        print(f"Debug: Running FDFD_Hz (TE Mode)... dl={self.dl} um")
+        simulation = fdfd_hz(self.omega, self.dl, eps_r, [self.npml, self.npml])
         
         try:
-             # fdfd_ez 返回 Hx, Hy, Ez
-             Hx, Hy, Ez = simulation.solve(self.source_mask)
+             # fdfd_hz 返回 Hz, Ex, Ey
+             Hz, Ex, Ey = simulation.solve(self.source_mask)
         except Exception as e:
              print(f"Error: Simulation failed: {e}")
              return None
         
         # --- 仿真健康检查 ---
-        max_field_val = np.max(np.abs(Ez))
-        print(f"Debug: Max Field Strength |Ez| = {max_field_val:.4e}")
+        max_field_val = np.max(np.abs(Hz))
+        max_field_val = np.max(np.abs(Hz))
+        # print(f"Debug: Max Field Strength |Hz| = {max_field_val:.4e}") # Commented out to reduce noise
         
         if max_field_val < 1e-4:
             print("\n" + "X"*50)
@@ -115,12 +117,12 @@ class CevicheSim:
         
         # 1. Global Field (截取中间区域用于画图)
         region = self.global_profile_region
-        global_field = Ez[region['x_start']:region['x_end'], 
+        global_field = Hz[region['x_start']:region['x_end'], 
                           region['y_start']:region['y_end']]
         
         # 2. Output Analysis (输出截面)
-        # 确保使用的是 Ez 分量
-        output_field = Ez[self.expansion_out_line, :]
+        # 确保使用的是 Hz 分量
+        output_field = Hz[self.expansion_out_line, :]
         
         # 积分窗口宽度 (pixels)
         window_r = int(1.0 / self.dl) # 窗口半径 1.0 um
@@ -150,7 +152,11 @@ class CevicheSim:
             S21 = top_power_abs 
             S31 = bot_power_abs
             efficiency = total_throughput_abs
+            efficiency = total_throughput_abs
             norm_status = "(Absolute - Unnormalized)"
+
+        # 打印关键指标，向用户展示变化
+        print(f"  -> Sim Result: S21={S21:.4e}, S31={S31:.4e}, Total={efficiency:.4e}")
 
         monitors = {
             'global_profile': {
@@ -170,7 +176,7 @@ class CevicheSim:
                 'efficiency': efficiency,
                 'position': self.throughput_line
             },
-            'full_field': Ez,  # 确保返回 Ez
+            'full_field': Hz,  # 确保返回 Hz
             'source_pos': (self.src_x, self.cy)
         }
         
@@ -199,7 +205,7 @@ if __name__ == "__main__":
     # 初始化仿真器
     sim = CevicheSim(geo)
     
-    print("Running simulation...")
+    print("运行仿真中...")
     
     # --- 步骤 0: 归一化 (用直波导获取参考功率) ---
     print("\n" + "="*60)
@@ -214,6 +220,15 @@ if __name__ == "__main__":
     
     P0 = norm_res['throughput']['total_power']
     print(f"\n归一化功率 P0 = {P0:.6e}\n")
+
+    # --- Debug: 保存直波导场图 ---
+    plt.figure(figsize=(10, 4))
+    plt.imshow(np.real(norm_res['global_profile']['power']).T, origin='lower', cmap='inferno', aspect='auto', norm=LogNorm(vmin=1e-2))
+    plt.title(f'Normalization (Straight WG) |Hz|^2, P0={P0:.2e}')
+    plt.colorbar(label='Power')
+    plt.savefig('debug_straight_wg.png')
+    plt.close()
+    print("Debug: 直波导（归一化）场图已保存到 debug_straight_wg.png")
     
     if P0 < 1e-10:
         print("\n" + "!"*60)
@@ -230,18 +245,18 @@ if __name__ == "__main__":
     monitors = sim.run(eps_device, normalization_power=P0)
     
     if monitors is None:
-        print("Simulation failed!")
+        print("仿真失败！")
         exit(1)
     
     # --- 打印结果 ---
     res_out = monitors['expansion_out']
     status = res_out['status']
     print("\n" + "="*60)
-    print(f"MONITOR RESULTS {status}")
+    print(f"监测器结果 {status}")
     print("="*60)
-    print(f"  S21 (Top):    {res_out['S21']:.6e}")
-    print(f"  S31 (Bottom): {res_out['S31']:.6e}")
-    print(f"  Total:        {monitors['throughput']['efficiency']:.6e}")
+    print(f"  S21 (上端口):    {res_out['S21']:.6e}")
+    print(f"  S31 (下端口): {res_out['S31']:.6e}")
+    print(f"  总计:        {monitors['throughput']['efficiency']:.6e}")
     print("="*60 + "\n")
     
     # --- 可视化 ---
@@ -255,17 +270,17 @@ if __name__ == "__main__":
     # 图1: 结构 + 光源位置诊断
     ax1 = fig.add_subplot(gs[0, 0])
     im1 = ax1.imshow(np.sqrt(np.real(eps_device).T), origin='lower', cmap='gray', aspect='auto')
-    ax1.plot(src_pos[0], src_pos[1], 'r*', markersize=15, label='Source Location')
-    ax1.set_title(f'Geometry Check (dl={sim.dl} um)', fontsize=12, fontweight='bold')
+    ax1.plot(src_pos[0], src_pos[1], 'r*', markersize=15, label='光源位置')
+    ax1.set_title(f'几何结构检查 (dl={sim.dl} um)', fontsize=12, fontweight='bold')
     ax1.legend()
-    plt.colorbar(im1, ax=ax1, label='Refractive Index (n)')
+    plt.colorbar(im1, ax=ax1, label='折射率 (n)')
     
     # 图2: MMI 区域光场
     ax2 = fig.add_subplot(gs[0, 1])
-    # 使用 log 刻度可以更清晰地看到弱光分布 (可选)
-    # im2 = ax2.imshow(np.real(global_power).T, origin='lower', cmap='inferno', aspect='auto', norm=LogNorm(vmin=1e-2))
-    im2 = ax2.imshow(np.real(global_power).T, origin='lower', cmap='inferno', aspect='auto')
-    ax2.set_title('Field Intensity |Ez|^2', fontsize=12)
+    # 使用 log 刻度可以更清晰地看到弱光分布 (开启 LogNorm)
+    im2 = ax2.imshow(np.real(global_power).T, origin='lower', cmap='inferno', aspect='auto', norm=LogNorm(vmin=1e-4))
+    # im2 = ax2.imshow(np.real(global_power).T, origin='lower', cmap='inferno', aspect='auto')
+    ax2.set_title('光场强度 |Hz|^2', fontsize=12)
     plt.colorbar(im2, ax=ax2)
     
     # 图3: 输出截面场分布
@@ -274,21 +289,21 @@ if __name__ == "__main__":
     y_axis = np.arange(len(out_field)) * sim.dl
     power_profile = np.abs(out_field)**2
     
-    ax3.plot(y_axis, power_profile, 'b-', linewidth=2, label='Output Power Profile')
+    ax3.plot(y_axis, power_profile, 'b-', linewidth=2, label='输出功率分布')
     
     # 调试信息
-    print(f"\nDebug: Output field shape: {out_field.shape}")
+    print(f"\n调试: 输出场形状: {out_field.shape}")
     max_power_idx = np.argmax(power_profile)
-    print(f"Debug: Max power at Y={y_axis[max_power_idx]:.3f} um, value={power_profile[max_power_idx]:.6e}")
+    print(f"调试: 最大功率位于 Y={y_axis[max_power_idx]:.3f} um, 值={power_profile[max_power_idx]:.6e}")
     
-    ax3.axvline(sim.y_top_idx * sim.dl, color='g', linestyle='--', label='Top Port')
-    ax3.axvline(sim.y_bot_idx * sim.dl, color='orange', linestyle='--', label='Bottom Port')
-    ax3.set_title(f'Output Profile (Ez Mode) {status}', fontsize=12)
-    ax3.set_xlabel('Y (um)')
+    ax3.axvline(sim.y_top_idx * sim.dl, color='g', linestyle='--', label='上端口')
+    ax3.axvline(sim.y_bot_idx * sim.dl, color='orange', linestyle='--', label='下端口')
+    ax3.set_title(f'输出分布 (Hz 模式) {status}', fontsize=12)
+    ax3.set_xlabel('Y (微米)')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig("mmi_simulation_result.png", dpi=150)
-    print("Result image saved to mmi_simulation_result.png")
-    plt.show()
+    print("结果图像已保存到 mmi_simulation_result.png")
+    # plt.show()
