@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class MMIGeometry:
-    def __init__(self, region_size=(50.0, 10.0), resolution=0.02):
+    def __init__(self, region_size=(50.0, 10.0), resolution=0.04):
         """
         初始化 MMI 几何生成器。
         

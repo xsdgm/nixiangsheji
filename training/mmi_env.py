@@ -35,9 +35,38 @@ class MMIOptEnv(gym.Env):
         self.alpha = 20.0 # 通光率权重
         self.beta = 0.0   # 不平衡权重 (初始为0)
         
+        # 记录历史最佳结构 (Elitism)
+        self.best_reward = -float('inf')
+        self.best_sdf = None
+        
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.geo.reset_geometry()
+        
+        # 混合重置策略 (Hybrid Reset Strategy)
+        rand_val = np.random.random()
+        
+        reset_type = ""
+        
+        if rand_val < 0.2:
+            # 20% 概率：完全重置 (Hard Reset) - 回到初始矩形
+            # 给予全新的探索机会
+            self.geo.reset_geometry()
+            reset_type = "Hard Reset (初始形状)"
+            
+        elif rand_val < 0.5 and self.best_sdf is not None:
+            # 30% 概率 (0.2~0.5)：回滚到最佳 (Rollback) 
+            # 从已知最好的点重新出发
+            self.geo.sdf = self.best_sdf.copy()
+            reset_type = "Rollback (回滚到最佳)"
+            
+        else:
+            # 50% 概率 (0.5~1.0)：软重置 (Soft Reset)
+            # 保留当前几何，继续微调 (Continuous Optimization)
+            # 注意：如果没有 best_sdf (刚开始训练)，也会落入这里，相当于继续优化
+            reset_type = "Soft Reset (继续优化)"
+            # 不做任何改变，保留 self.geo.sdf
+            
+        print(f"Episode Reset: {reset_type} | Step {self.current_step} -> 0")
         self.current_step = 0
         return self._get_obs(), {}
 
@@ -99,6 +128,13 @@ class MMIOptEnv(gym.Env):
         imbalance = abs(t_top - t_bot)
         
         reward = self.alpha * total_t - self.beta * imbalance
+        
+        # --- 更新最佳记录 ---
+        if reward > self.best_reward:
+            self.best_reward = reward
+            self.best_sdf = self.geo.sdf.copy()
+            print(f"  >>> New Best Found! Reward: {reward:.4f} (Trans={total_t:.4f}, Imbal={imbalance:.4f})")
+        # --------------------
         
         # 5. 完成条件
         terminated = self.current_step >= self.max_steps

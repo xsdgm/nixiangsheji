@@ -1,9 +1,12 @@
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 import numpy as np
+import csv
+import glob
 
 from mmi_env import MMIOptEnv
 
@@ -22,6 +25,15 @@ class RewardLoggingCallback(BaseCallback):
         self.episode_imbalances = []
         self.current_episode_reward = 0
         self.current_episode_steps = 0
+        self.episode_count = 0
+
+        # 初始化详细日志文件
+        self.log_file = os.path.join("logs", "detailed_training_log.csv")
+        # 如果文件不存在，写入表头
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, mode='w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["global_step", "episode", "step_reward", "transmission", "s21_top", "s31_bot", "imbalance", "alpha", "beta"])
         
     def _on_step(self) -> bool:
         # --- 动态调整权重逻辑 ---
@@ -54,6 +66,25 @@ class RewardLoggingCallback(BaseCallback):
             info = self.locals['infos'][0]
             reward = self.locals['rewards'][0]
             
+            # --- 记录数据到 CSV ---
+            try:
+                with open(self.log_file, mode='a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        self.num_timesteps,
+                        self.episode_count,
+                        reward,
+                        info.get('transmission', 0),
+                        info.get('t_top', 0),
+                        info.get('t_bot', 0),
+                        info.get('imbalance', 0),
+                        current_alpha,
+                        current_beta
+                    ])
+            except Exception as e:
+                print(f"Error writing log: {e}")
+            # ---------------------
+
             self.current_episode_reward += reward
             self.current_episode_steps += 1
             
@@ -73,6 +104,7 @@ class RewardLoggingCallback(BaseCallback):
             # 检测episode结束
             done = self.locals.get('dones', [False])[0]
             if done:
+                self.episode_count += 1
                 self.episode_rewards.append(self.current_episode_reward)
                 if 'transmission' in info:
                     self.episode_transmissions.append(info['transmission'])
@@ -103,6 +135,7 @@ class RewardLoggingCallback(BaseCallback):
         return True
 
 
+
 def train():
     log_dir = "./logs/"
     os.makedirs(log_dir, exist_ok=True)
@@ -114,19 +147,59 @@ def train():
     env = MMIOptEnv()
     env = Monitor(env, log_dir)
     
-    # Initialize Agent
-    # PPO is a good default for continuous control
-    model = PPO("MlpPolicy", env, verbose=1)
+    # --- Checkpointing Setup ---
+    # 每 1000 步保存一次检查点，防止崩溃丢失进度
+    checkpoint_callback = CheckpointCallback(
+        save_freq=1000, 
+        save_path=log_dir,
+        name_prefix="rl_model"
+    )
+    # ---------------------------
+    
+    # Initialize or Load Agent
+    model_path = "mmi_ppo_model.zip"
+    reset_timesteps = True
+    model = None
+    
+    if os.path.exists(model_path):
+        print(f"Loading existing model from {model_path}...")
+        try:
+            model = PPO.load(model_path, env=env)
+            reset_timesteps = False
+            print("Resuming training from final model...")
+        except Exception as e:
+            print(f"Failed to load {model_path}: {e}")
+            
+    if model is None:
+        # Check for latest checkpoint in logs/
+        checkpoints = sorted(glob.glob(os.path.join(log_dir, "rl_model_*.zip")), key=os.path.getmtime)
+        if checkpoints:
+            latest_ckpt = checkpoints[-1]
+            print(f"Loading latest checkpoint from {latest_ckpt}...")
+            try:
+                model = PPO.load(latest_ckpt, env=env)
+                reset_timesteps = False
+                print("Resuming training from checkpoint...")
+            except Exception as e:
+                print(f"Failed to load checkpoint {latest_ckpt}: {e}")
+
+    if model is None:
+        print("Creating new model...")
+        # PPO is a good default for continuous control
+        model = PPO("MlpPolicy", env, verbose=1)
+        print("Starting new training session...")
     
     # 创建自定义回调 (传入总步数用于计算进度)
     reward_callback = RewardLoggingCallback(total_timesteps=TOTAL_TIMESTEPS, print_freq=100)
     
+    callbacks = [reward_callback, checkpoint_callback]
+
     print("Starting training with Dynamic Reward Schedule...")
     print("Alpha (传输): 20.0 -> 10.0")
     print("Beta  (平衡):  5.0 -> 80.0\n")
     
     # Train
-    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=reward_callback)
+    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callbacks, reset_num_timesteps=reset_timesteps)
     
     # Save the model
     model.save("mmi_ppo_model")
