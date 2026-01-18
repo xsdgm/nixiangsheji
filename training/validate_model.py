@@ -20,6 +20,11 @@ def validate():
     print(f"Loading model from {os.path.abspath(model_path)}...")
     
     env = MMIOptEnv()
+    
+    # 设置平衡的奖励权重（验证模式）
+    env.alpha = 10.0  # 传输效率权重
+    env.beta = 10.0   # 分光平衡权重
+    
     try:
         model = PPO.load(model_path, env=env)
     except Exception as e:
@@ -27,6 +32,8 @@ def validate():
         return
 
     print("Starting validation...")
+    print(f"奖励权重: Alpha(传输)={env.alpha}, Beta(平衡)={env.beta}")
+    print()
     
     # Run a few episodes to get a stable idea of performance if needed, 
     # but request implies "validate model" which often means one run or a summary.

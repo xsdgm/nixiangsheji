@@ -48,8 +48,8 @@ class RewardLoggingCallback(BaseCallback):
         # Alpha (传输权重): 20.0 -> 10.0 (随时间略微降低，保持关注但让位于平衡)
         # Beta (平衡权重):   0.0 -> 50.0 (从0开始，后期强力惩罚不平衡)
         
-        start_alpha, end_alpha = 20.0, 10.0
-        start_beta, end_beta = 5.0, 80.0 # 提高最终beta以强制平衡
+        start_alpha, end_alpha = 15.0, 5.0   # 降低传输权重，让位给平衡
+        start_beta, end_beta = 50.0, 150.0   # 大幅提高平衡权重
         
         current_alpha = start_alpha + (end_alpha - start_alpha) * progress
         current_beta = start_beta + (end_beta - start_beta) * progress
@@ -140,8 +140,8 @@ def train():
     log_dir = "./logs/"
     os.makedirs(log_dir, exist_ok=True)
     
-    # 训练步数设定
-    TOTAL_TIMESTEPS = 10000
+    # 训练步数设定（继续训练只需较少步数）
+    TOTAL_TIMESTEPS = 1000
 
     # Create environment
     env = MMIOptEnv()
@@ -195,8 +195,8 @@ def train():
     callbacks = [reward_callback, checkpoint_callback]
 
     print("Starting training with Dynamic Reward Schedule...")
-    print("Alpha (传输): 20.0 -> 10.0")
-    print("Beta  (平衡):  5.0 -> 80.0\n")
+    print("Alpha (传输): 15.0 -> 5.0  (降低传输权重)")
+    print("Beta  (平衡): 50.0 -> 150.0 (强化平衡惩罚)\n")
     
     # Train
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callbacks, reset_num_timesteps=reset_timesteps)

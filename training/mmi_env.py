@@ -102,7 +102,7 @@ class MMIOptEnv(gym.Env):
         mmi_end = int(self.geo.Nx * 0.8)
         center_mask[mmi_start:mmi_end, :] = 1.0
         
-        final_delta = delta_sdf * center_mask * 0.5 # 缩放形变强度
+        final_delta = delta_sdf * center_mask * 10.0 # 缩放形变强度（增大以产生可见变化）
         
         # 2. 更新几何
         self.geo.update_sdf(final_delta)
